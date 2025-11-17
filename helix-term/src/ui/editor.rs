@@ -20,7 +20,7 @@ use helix_core::{
     syntax::{self, OverlayHighlights},
     text_annotations::TextAnnotations,
     unicode::width::UnicodeWidthStr,
-    visual_offset_from_block, Change, Position, Range, Selection, Transaction,
+    visual_offset_from_block, Position, Range, Selection,
 };
 use helix_view::{
     annotations::diagnostics::DiagnosticFilter,
@@ -46,13 +46,9 @@ pub struct EditorView {
     terminal_focused: bool,
 }
 
-#[derive(Debug, Clone)]
 pub enum InsertEvent {
-    Key(KeyEvent),
-    CompletionApply {
-        trigger_offset: usize,
-        changes: Vec<Change>,
-    },
+    Key(()),
+    CompletionApply {},
     TriggerCompletion,
     RequestCompletion,
 }
@@ -958,54 +954,6 @@ impl EditorView {
                 let i = i.to_digit(10).unwrap() as usize;
                 cxt.editor.count = NonZeroUsize::new(i);
             }
-            // special handling for repeat operator
-            (key!('.'), _) if self.keymaps.pending().is_empty() => {
-                for _ in 0..cxt.editor.count.map_or(1, NonZeroUsize::into) {
-                    // first execute whatever put us into insert mode
-                    self.last_insert.0.execute(cxt);
-                    let mut last_savepoint = None;
-                    let mut last_request_savepoint = None;
-                    // then replay the inputs
-                    for key in self.last_insert.1.clone() {
-                        match key {
-                            InsertEvent::Key(key) => self.insert_mode(cxt, key),
-                            InsertEvent::CompletionApply {
-                                trigger_offset,
-                                changes,
-                            } => {
-                                let (view, doc) = current!(cxt.editor);
-
-                                if let Some(last_savepoint) = last_savepoint.as_deref() {
-                                    doc.restore(view, last_savepoint, true);
-                                }
-
-                                let text = doc.text().slice(..);
-                                let cursor = doc.selection(view.id).primary().cursor(text);
-
-                                let shift_position = |pos: usize| -> usize {
-                                    (pos + cursor).saturating_sub(trigger_offset)
-                                };
-
-                                let tx = Transaction::change(
-                                    doc.text(),
-                                    changes.iter().cloned().map(|(start, end, t)| {
-                                        (shift_position(start), shift_position(end), t)
-                                    }),
-                                );
-                                doc.apply(&tx, view.id);
-                            }
-                            InsertEvent::TriggerCompletion => {
-                                last_savepoint = take(&mut last_request_savepoint);
-                            }
-                            InsertEvent::RequestCompletion => {
-                                let (view, doc) = current!(cxt.editor);
-                                last_request_savepoint = Some(doc.savepoint(view));
-                            }
-                        }
-                    }
-                }
-                cxt.editor.count = None;
-            }
             _ => {
                 // set the count
                 cxt.count = cxt.editor.count;
@@ -1062,14 +1010,11 @@ impl EditorView {
             match last_completion {
                 CompleteAction::Triggered => (),
                 CompleteAction::Applied {
-                    trigger_offset,
-                    changes,
+                    trigger_offset: _,
+                    changes: _,
                     placeholder,
                 } => {
-                    self.last_insert.1.push(InsertEvent::CompletionApply {
-                        trigger_offset,
-                        changes,
-                    });
+                    self.last_insert.1.push(InsertEvent::CompletionApply {});
                     on_next_key = placeholder.then_some(Box::new(|cx, key| {
                         if let Some(c) = key.char() {
                             let (view, doc) = current!(cx.editor);
@@ -1452,7 +1397,7 @@ impl Component for EditorView {
                                 self.insert_mode(&mut cx, key);
 
                                 // record last_insert key
-                                self.last_insert.1.push(InsertEvent::Key(key));
+                                self.last_insert.1.push(InsertEvent::Key(()));
                             }
                         }
                         mode => self.command_mode(mode, &mut cx, key),
